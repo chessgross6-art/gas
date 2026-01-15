@@ -1,0 +1,16 @@
+version: '3.8'
+
+services:
+  voice_ai_worker:
+    build: .
+    container_name: voice_ai_worker
+    restart: always
+
+    env_file:
+      - .env.bot
+
+    volumes:
+      - ./scripts:/app/scripts
+
+    extra_hosts:
+      - "host.docker.internal:host-gateway"

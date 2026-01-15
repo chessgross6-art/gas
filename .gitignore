@@ -1,0 +1,7 @@
+.env
+.env.bot
+venv/
+__pycache__/
+*.mp3
+docker-compose.yml 
+appwrite/
