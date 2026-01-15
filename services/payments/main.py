@@ -70,8 +70,7 @@ async def create_payment_link(pay_req: PaymentRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.get("/webhook/vepay")
-@app.post("/webhook/vepay")
+@app.all("/webhook/vepay") 
 async def vepay_webhook(request: Request):
     if request.method == "GET":
         data = dict(request.query_params)
@@ -84,9 +83,16 @@ async def vepay_webhook(request: Request):
 
     req_sign = data.get('sign')
     
-    if req_sign:
-        pass 
+    mch_id = data.get('mch_id', VEPAY_MCH_ID)
+    order_id = data.get('order_id')
+    amount = data.get('amount')
+    currency = data.get('currency', 'RUB')
     
+    my_sign = generate_sign(mch_id, order_id, amount, currency, VEPAY_SECRET)
+    
+    if req_sign != my_sign:
+        return {"error": "Invalid signature"}
+
     if 'order_id' not in data or 'status' not in data:
         return {"error": "Invalid params"}
 
