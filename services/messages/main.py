@@ -62,7 +62,7 @@ def update_prompts_cache():
         
         LAST_PROMPT_UPDATE = time.time()
     except Exception as e:
-        print(f"Config error: {e}")
+        print(f"Ошибка обновления конфига: {e}")
 
 def get_user_status(chat_id):
     try:
@@ -86,7 +86,7 @@ def search_web(query):
                 results_text += f"- {res['body']}\n"
         return results_text
     except Exception as e:
-        print(f"Search error: {e}")
+        print(f"Ошибка поиска: {e}")
         return None
 
 def ai_decide_search(text):
@@ -119,7 +119,7 @@ def generate_voice(text, chat_id):
         os.remove(filename)
         return file_id
     except Exception as e:
-        print(f"TTS Error: {e}")
+        print(f"Ошибка TTS (синтеза речи): {e}")
         if os.path.exists(filename): os.remove(filename)
         return None
 
@@ -135,11 +135,11 @@ def ask_ollama(last_message, chat_id, user_forced_search=False):
         if user_forced_search or ai_decide_search(last_message):
             search_result = search_web(last_message)
             if search_result:
-                context_data = f"DATA:\n{search_result}\n"
+                context_data = f"ДАННЫЕ ИЗ ПОИСКА:\n{search_result}\n"
     else:
         system_prompt = PROMPT_LITE
         if user_forced_search or ai_decide_search(last_message):
-            context_data = "(Search requested but subscription is strictly required. Decline politely.)"
+            context_data = "(Пользователь запросил поиск, но подписка отсутствует. Вежливо откажи в поиске актуальных данных.)"
 
     try:
         history = db.list_documents(DATABASE_ID, COLLECTION_MESSAGES, queries=[
@@ -156,9 +156,9 @@ def ask_ollama(last_message, chat_id, user_forced_search=False):
         messages.append({"role": role, "content": doc['text']})
     
     forced_user_message = (
-        f"ROLE INSTRUCTION: {system_prompt}\n"
+        f"ИНСТРУКЦИЯ РОЛИ: {system_prompt}\n"
         f"----------------\n"
-        f"USER INPUT: {last_message}"
+        f"ВВОД ПОЛЬЗОВАТЕЛЯ: {last_message}"
     )
 
     if context_data:
@@ -170,10 +170,10 @@ def ask_ollama(last_message, chat_id, user_forced_search=False):
         response = requests.post(OLLAMA_CHAT_URL, json={"model": MODEL_NAME, "messages": messages, "stream": False})
         return response.json()['message']['content']
     except Exception:
-        return "Error generating response"
+        return "Ошибка генерации ответа"
 
 def main():
-    print("Worker started")
+    print("Воркер запущен")
     
     start_time = datetime.now(timezone.utc)
     
@@ -204,16 +204,16 @@ def main():
                         processed_ids.add(msg_id)
                         continue
                 except Exception as e:
-                    print(f"Date parse error: {e}")
+                    print(f"Ошибка парсинга даты: {e}")
                     processed_ids.add(msg_id)
                     continue
 
-                print(f"Processing: {msg['text']}")
+                print(f"Обработка сообщения: {msg['text']}")
                 processed_ids.add(msg_id)
                     
                 user_forced_search = msg.get('search_enabled', False)
                 ai_text = ask_ollama(msg['text'], msg['chat_id'], user_forced_search)
-                print(f"Response: {ai_text}")
+                print(f"Ответ AI: {ai_text}")
                     
                 audio_id = generate_voice(ai_text, msg['chat_id'])
                     
@@ -224,7 +224,7 @@ def main():
                 
             time.sleep(1)
         except Exception as e:
-            print(f"Loop error: {e}")
+            print(f"Ошибка в цикле обработки: {e}")
             time.sleep(2)
 
 if __name__ == "__main__":

@@ -21,14 +21,10 @@ API_KEY = os.getenv('API_KEY')
 DATABASE_ID = os.getenv('DATABASE_ID')
 COLLECTION_PROFILES = os.getenv('COLLECTION_PROFILES', 'profiles')
 
-
 VEPAY_MCH_ID = os.getenv('VEPAY_MCH_ID') 
 VEPAY_SECRET = os.getenv('VEPAY_SECRET_KEY')
-
 VEPAY_API_URL = os.getenv('VEPAY_API_URL', 'https://api.vepay.online/merchant/pay')
-
 MY_WEBHOOK_URL = os.getenv('MY_WEBHOOK_URL', 'http://YOUR_SERVER_IP:8000/webhook/vepay') 
-
 
 client = Client()
 client.set_endpoint(APPWRITE_ENDPOINT)
@@ -40,21 +36,15 @@ class PaymentRequest(BaseModel):
     user_id: str
     amount: float = 199.00
 
-
 def generate_x_token(secret_key: str, json_body: str) -> str:
     sha1_key = hashlib.sha1(secret_key.encode('utf-8')).hexdigest()
     sha1_body = hashlib.sha1(json_body.encode('utf-8')).hexdigest()
     token_str = sha1_key + sha1_body
     return hashlib.sha1(token_str.encode('utf-8')).hexdigest()
 
-def generate_md5_sign(mch_id, order_id, amount, currency, secret):
-
-    raw_str = f"{mch_id}{order_id}{amount}{currency}{secret}"
-    return hashlib.md5(raw_str.encode('utf-8')).hexdigest()
-
 @app.get("/")
 def home():
-    return {"status": "Vepay Integration"}
+    return {"status": "Интеграция Vepay работает"}
 
 @app.post("/pay/create")
 async def create_payment_link(pay_req: PaymentRequest):
@@ -63,7 +53,7 @@ async def create_payment_link(pay_req: PaymentRequest):
     payload = {
         "amount": int(pay_req.amount), 
         "extid": extid,       
-        "descript": "Voice AI Subscription",
+        "descript": "Подписка Voice AI", 
         "timeout": 1800,         
         "successurl": "https://google.com", 
         "failurl": "https://google.com",
@@ -72,7 +62,6 @@ async def create_payment_link(pay_req: PaymentRequest):
     }
     
     json_body = json.dumps(payload)
-    
     token = generate_x_token(VEPAY_SECRET, json_body)
     
     headers = {
@@ -86,13 +75,13 @@ async def create_payment_link(pay_req: PaymentRequest):
             response = await http_client.post(VEPAY_API_URL, content=json_body, headers=headers)
             
         if response.status_code != 200:
-            print(f"Vepay Error: {response.text}")
-            raise HTTPException(status_code=400, detail="Payment provider error")
+            print(f"Ошибка Vepay: {response.text}")
+            raise HTTPException(status_code=400, detail="Ошибка на стороне платежного провайдера")
             
         resp_data = response.json()
         
         if "url" not in resp_data:
-            raise HTTPException(status_code=500, detail="No URL in response")
+            raise HTTPException(status_code=500, detail="В ответе нет ссылки на оплату")
             
         return {
             "payment_url": resp_data["url"],
@@ -101,7 +90,7 @@ async def create_payment_link(pay_req: PaymentRequest):
         }
 
     except Exception as e:
-        print(f"Error creating payment: {e}")
+        print(f"Ошибка создания платежа: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.all("/webhook/vepay") 
@@ -116,8 +105,7 @@ async def vepay_webhook(request: Request):
             form = await request.form()
             data = dict(form)
 
-    print(f"Webhook received: {data}")
-
+    print(f"Вебхук получен: {data}")
 
     order_id = data.get('extid') or data.get('order_id')
     status = data.get('status')
@@ -132,7 +120,7 @@ async def vepay_webhook(request: Request):
             user_id = parts[1]
 
     if not user_id:
-        print("No user_id found in order_id")
+        print("user_id не найден в номере заказа (order_id)")
         return "OK"
     
     try:
@@ -146,18 +134,17 @@ async def vepay_webhook(request: Request):
 
             if not profiles['documents'][0].get('is_pro'):
                 db.update_document(DATABASE_ID, COLLECTION_PROFILES, doc_id, {'is_pro': True})
-                print(f"User {user_id} upgraded to PRO")
+                print(f"Пользователь {user_id} обновлен до PRO")
         else:
-
             db.create_document(DATABASE_ID, COLLECTION_PROFILES, 'unique()', 
-                {'user_id': user_id, 'is_pro': True, 'username': 'Unknown'})
-            print(f"User {user_id} created and upgraded")
+                {'user_id': user_id, 'is_pro': True, 'username': 'Неизвестный'})
+            print(f"Пользователь {user_id} создан и обновлен до PRO")
                 
         return "OK" 
         
     except Exception as e:
-        print(f"DB Error: {e}")
-        raise HTTPException(status_code=500, detail="DB Error")
+        print(f"Ошибка БД: {e}")
+        raise HTTPException(status_code=500, detail="Ошибка базы данных")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
