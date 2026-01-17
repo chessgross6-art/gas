@@ -1,6 +1,8 @@
 .env
 .env.bot
+.env.appwrite
 venv/
 __pycache__/
 *.mp3
 appwrite/
+docker-compose.appwrite.yml

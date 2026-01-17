@@ -14,8 +14,8 @@ from appwrite.services.storage import Storage
 from appwrite.query import Query
 from appwrite.input_file import InputFile
 
-warnings.simplefilter('ignore')
-load_dotenv(dotenv_path='.env.bot')
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="appwrite")
+load_dotenv(dotenv_path='.env')
 
 PROJECT_ID = os.getenv('PROJECT_ID')
 API_KEY = os.getenv('API_KEY')

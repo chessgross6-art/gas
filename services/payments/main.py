@@ -24,7 +24,7 @@ COLLECTION_PROFILES = os.getenv('COLLECTION_PROFILES', 'profiles')
 VEPAY_MCH_ID = os.getenv('VEPAY_MCH_ID') 
 VEPAY_SECRET = os.getenv('VEPAY_SECRET_KEY')
 VEPAY_API_URL = os.getenv('VEPAY_API_URL', 'https://api.vepay.online/merchant/pay')
-MY_WEBHOOK_URL = os.getenv('MY_WEBHOOK_URL', 'http://YOUR_SERVER_IP:8000/webhook/vepay') 
+MY_WEBHOOK_URL = os.getenv('MY_WEBHOOK_URL', 'http://localhost:8000/webhook/vepay') 
 
 client = Client()
 client.set_endpoint(APPWRITE_ENDPOINT)
@@ -37,6 +37,7 @@ class PaymentRequest(BaseModel):
     amount: float = 199.00
 
 def generate_x_token(secret_key: str, json_body: str) -> str:
+    if not secret_key: return "NO_SECRET_KEY"
     sha1_key = hashlib.sha1(secret_key.encode('utf-8')).hexdigest()
     sha1_body = hashlib.sha1(json_body.encode('utf-8')).hexdigest()
     token_str = sha1_key + sha1_body
@@ -53,7 +54,7 @@ async def create_payment_link(pay_req: PaymentRequest):
     payload = {
         "amount": int(pay_req.amount), 
         "extid": extid,       
-        "descript": "Подписка Voice AI", 
+        "descript": "Подписка Voice AI",
         "timeout": 1800,         
         "successurl": "https://google.com", 
         "failurl": "https://google.com",
@@ -71,17 +72,23 @@ async def create_payment_link(pay_req: PaymentRequest):
     }
     
     try:
+        print(f"Отправка запроса в Vepay: {VEPAY_API_URL}")
         async with httpx.AsyncClient() as http_client:
             response = await http_client.post(VEPAY_API_URL, content=json_body, headers=headers)
             
-        if response.status_code != 200:
-            print(f"Ошибка Vepay: {response.text}")
-            raise HTTPException(status_code=400, detail="Ошибка на стороне платежного провайдера")
+        print(f"Ответ Vepay (код {response.status_code}): {response.text[:200]}")
+
+        try:
+            resp_data = response.json()
+        except json.JSONDecodeError:
+            raise HTTPException(
+                status_code=502, 
+                detail=f"Ошибка Vepay (вернул не JSON, код {response.status_code}). Проверьте URL и ID мерчанта."
+            )
             
-        resp_data = response.json()
-        
-        if "url" not in resp_data:
-            raise HTTPException(status_code=500, detail="В ответе нет ссылки на оплату")
+        if response.status_code != 200 or "url" not in resp_data:
+            error_msg = resp_data.get('message') or resp_data.get('name') or "Неизвестная ошибка"
+            raise HTTPException(status_code=400, detail=f"Vepay Error: {error_msg}")
             
         return {
             "payment_url": resp_data["url"],
@@ -89,11 +96,14 @@ async def create_payment_link(pay_req: PaymentRequest):
             "vepay_id": resp_data.get("id")
         }
 
+    except HTTPException as he:
+        raise he
     except Exception as e:
-        print(f"Ошибка создания платежа: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
 
-@app.all("/webhook/vepay") 
+@app.api_route("/webhook/vepay", methods=["GET", "POST"])
 async def vepay_webhook(request: Request):
     data = {}
     if request.method == "GET":
@@ -131,7 +141,6 @@ async def vepay_webhook(request: Request):
         
         if profiles['total'] > 0:
             doc_id = profiles['documents'][0]['$id']
-
             if not profiles['documents'][0].get('is_pro'):
                 db.update_document(DATABASE_ID, COLLECTION_PROFILES, doc_id, {'is_pro': True})
                 print(f"Пользователь {user_id} обновлен до PRO")
@@ -144,7 +153,7 @@ async def vepay_webhook(request: Request):
         
     except Exception as e:
         print(f"Ошибка БД: {e}")
-        raise HTTPException(status_code=500, detail="Ошибка базы данных")
+        return "OK"
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
