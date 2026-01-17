@@ -13,6 +13,8 @@ from appwrite.services.databases import Databases
 from appwrite.services.storage import Storage
 from appwrite.query import Query
 from appwrite.input_file import InputFile
+from appwrite.permission import Permission
+from appwrite.role import Role
 
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="appwrite")
 load_dotenv(dotenv_path='.env')
@@ -25,9 +27,9 @@ COLLECTION_PROFILES = os.getenv('COLLECTION_PROFILES', 'profiles')
 COLLECTION_CHATS = os.getenv('COLLECTION_CHATS', 'chats')
 COLLECTION_SETTINGS = os.getenv('COLLECTION_SETTINGS', 'system_settings')
 BUCKET_ID = os.getenv('BUCKET_ID')
-APPWRITE_ENDPOINT = os.getenv('APPWRITE_ENDPOINT', 'http://localhost/v1')
+APPWRITE_ENDPOINT = os.getenv('APPWRITE_ENDPOINT', 'http://host.docker.internal/v1')
 
-OLLAMA_HOST = os.getenv('OLLAMA_URL', 'http://localhost:11434')
+OLLAMA_HOST = os.getenv('OLLAMA_URL', 'http://ollama:11434')
 OLLAMA_GENERATE_URL = f"{OLLAMA_HOST}/api/generate"
 OLLAMA_CHAT_URL = f"{OLLAMA_HOST}/api/chat"
 MODEL_NAME = os.getenv('MODEL_NAME', 'gemma2:2b')
@@ -59,10 +61,16 @@ def update_prompts_cache():
     except Exception as e:
         print(f"Ошибка обновления конфига: {e}")
 
-def get_user_status(chat_id):
+def get_chat_owner(chat_id):
     try:
         chat_doc = db.get_document(DATABASE_ID, COLLECTION_CHATS, chat_id)
-        user_id = chat_doc['user_id']
+        return chat_doc['user_id']
+    except Exception as e:
+        print(f"Владелец чата не найден {chat_id}: {e}")
+        return None
+
+def get_user_status(user_id):
+    try:
         profiles = db.list_documents(DATABASE_ID, COLLECTION_PROFILES, queries=[Query.equal('user_id', user_id)])
         if profiles['total'] > 0:
             return profiles['documents'][0].get('is_pro', False)
@@ -116,9 +124,8 @@ def generate_voice(text, chat_id):
         if os.path.exists(filename): os.remove(filename)
         return None
 
-def ask_ollama(last_message, chat_id, user_forced_search=False):
+def ask_ollama(last_message, chat_id, is_pro, user_forced_search=False):
     update_prompts_cache()
-    is_pro = get_user_status(chat_id)
     context_data = ""
     system_prompt = PROMPT_PRO if is_pro else PROMPT_LITE
 
@@ -145,7 +152,6 @@ def ask_ollama(last_message, chat_id, user_forced_search=False):
     forced_user_message = f"ИНСТРУКЦИЯ: {system_prompt}\nВВОД: {last_message}"
     if context_data:
         forced_user_message = context_data + "\n" + forced_user_message
-
     messages.append({"role": "user", "content": forced_user_message})
 
     try:
@@ -166,31 +172,45 @@ def main():
             
             for msg in resp['documents']:
                 msg_id = msg['$id']
+                chat_id = msg['chat_id']
                 print(f"Обработка сообщения: {msg['text']}")
 
+                owner_id = get_chat_owner(chat_id)
+                if not owner_id:
+                    print(f"Владелец чата не найден, помечаем сообщение {msg_id} как прочитанное, чтобы не зацикливаться")
+                    db.update_document(DATABASE_ID, COLLECTION_MESSAGES, msg_id, {'is_read': True})
+                    continue
+                
+                is_pro = get_user_status(owner_id)
                 user_forced_search = msg.get('search_enabled', False)
-                ai_text = ask_ollama(msg['text'], msg['chat_id'], user_forced_search)
-                print(f"Ответ AI: {ai_text}")
+                ai_text = ask_ollama(msg['text'], chat_id, is_pro, user_forced_search)
+                audio_id = generate_voice(ai_text, chat_id)
                 
-                audio_id = generate_voice(ai_text, msg['chat_id'])
-                
-                db.create_document(DATABASE_ID, COLLECTION_MESSAGES, 'unique()', {
-                    'chat_id': msg['chat_id'], 'sender': 'ai', 'text': ai_text, 
-                    'is_voice': True, 'audio_file_id': audio_id,
-                    'is_read': True 
-                })
-                
-                db.update_document(DATABASE_ID, COLLECTION_MESSAGES, msg_id, {
-                    'is_read': True
-                })
-                
+                db.create_document(
+                    database_id=DATABASE_ID, 
+                    collection_id=COLLECTION_MESSAGES, 
+                    document_id='unique()', 
+                    data={
+                        'chat_id': chat_id, 
+                        'sender': 'ai', 
+                        'text': ai_text, 
+                        'is_voice': True,
+                        'audio_file_id': audio_id,
+                        'is_read': True,
+                        'search_enabled': False
+                    },
+                    permissions=[
+                        Permission.read(Role.user(owner_id))
+                    ]
+                )
+                db.update_document(DATABASE_ID, COLLECTION_MESSAGES, msg_id, {'is_read': True})
                 time.sleep(1)
 
             if len(resp['documents']) == 0:
                 time.sleep(2)
 
         except Exception as e:
-            print(f"Ошибка в цикле обработки: {e}")
+            print(f"Ошибка в цикле воркера: {e}")
             time.sleep(5)
 
 if __name__ == "__main__":

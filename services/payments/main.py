@@ -9,13 +9,17 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 from appwrite.client import Client
 from appwrite.services.databases import Databases
+from appwrite.services.users import Users
 from appwrite.query import Query
+from appwrite.id import ID
+from appwrite.permission import Permission
+from appwrite.role import Role
 
-load_dotenv(dotenv_path='.env.bot')
+load_dotenv(dotenv_path='.env')
 
-app = FastAPI()
+app = FastAPI(title="ИИ Ассистент")
 
-APPWRITE_ENDPOINT = os.getenv('APPWRITE_ENDPOINT')
+APPWRITE_ENDPOINT = os.getenv('APPWRITE_ENDPOINT', 'http://host.docker.internal/v1')
 PROJECT_ID = os.getenv('PROJECT_ID')
 API_KEY = os.getenv('API_KEY')
 DATABASE_ID = os.getenv('DATABASE_ID')
@@ -30,7 +34,9 @@ client = Client()
 client.set_endpoint(APPWRITE_ENDPOINT)
 client.set_project(PROJECT_ID)
 client.set_key(API_KEY)
+
 db = Databases(client)
+users = Users(client)
 
 class PaymentRequest(BaseModel):
     user_id: str
@@ -45,7 +51,7 @@ def generate_x_token(secret_key: str, json_body: str) -> str:
 
 @app.get("/")
 def home():
-    return {"status": "Интеграция Vepay работает"}
+    return {"status": "Backend запущен (Только Vepay)"}
 
 @app.post("/pay/create")
 async def create_payment_link(pay_req: PaymentRequest):
@@ -54,9 +60,9 @@ async def create_payment_link(pay_req: PaymentRequest):
     payload = {
         "amount": int(pay_req.amount), 
         "extid": extid,       
-        "descript": "Подписка Voice AI",
+        "descript": "Подписка AI",
         "timeout": 1800,         
-        "successurl": "https://google.com", 
+        "successurl": "https://google.com",
         "failurl": "https://google.com",
         "cancelurl": "https://google.com",
         "postbackurl": MY_WEBHOOK_URL, 
@@ -72,23 +78,16 @@ async def create_payment_link(pay_req: PaymentRequest):
     }
     
     try:
-        print(f"Отправка запроса в Vepay: {VEPAY_API_URL}")
         async with httpx.AsyncClient() as http_client:
             response = await http_client.post(VEPAY_API_URL, content=json_body, headers=headers)
-            
-        print(f"Ответ Vepay (код {response.status_code}): {response.text[:200]}")
-
+        
         try:
             resp_data = response.json()
-        except json.JSONDecodeError:
-            raise HTTPException(
-                status_code=502, 
-                detail=f"Ошибка Vepay (вернул не JSON, код {response.status_code}). Проверьте URL и ID мерчанта."
-            )
+        except:
+            raise HTTPException(status_code=502, detail="Ошибка ответа Vepay (не JSON)")
             
         if response.status_code != 200 or "url" not in resp_data:
-            error_msg = resp_data.get('message') or resp_data.get('name') or "Неизвестная ошибка"
-            raise HTTPException(status_code=400, detail=f"Vepay Error: {error_msg}")
+            raise HTTPException(status_code=400, detail="Ошибка Vepay при создании ссылки")
             
         return {
             "payment_url": resp_data["url"],
@@ -96,63 +95,66 @@ async def create_payment_link(pay_req: PaymentRequest):
             "vepay_id": resp_data.get("id")
         }
 
-    except HTTPException as he:
-        raise he
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Внутренняя ошибка сервера: {str(e)}")
+        print(f"Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.api_route("/webhook/vepay", methods=["GET", "POST"])
 async def vepay_webhook(request: Request):
     data = {}
-    if request.method == "GET":
-        data = dict(request.query_params)
+    if request.method == "GET": data = dict(request.query_params)
     else:
-        try:
-            data = await request.json()
-        except:
+        try: data = await request.json()
+        except: 
             form = await request.form()
             data = dict(form)
-
-    print(f"Вебхук получен: {data}")
 
     order_id = data.get('extid') or data.get('order_id')
     status = data.get('status')
 
-    if str(status) not in ['1', 'success', 'paid']:
-        return "OK" 
+    if str(status) not in ['1', 'success', 'paid']: return "OK" 
 
     user_id = None
     if order_id and order_id.startswith('SUB-'):
         parts = order_id.split('-')
-        if len(parts) >= 2:
-            user_id = parts[1]
+        if len(parts) >= 2: user_id = parts[1]
 
-    if not user_id:
-        print("user_id не найден в номере заказа (order_id)")
-        return "OK"
+    if not user_id: return "OK"
     
     try:
-        profiles = db.list_documents(
-            DATABASE_ID, COLLECTION_PROFILES, 
-            queries=[Query.equal('user_id', user_id)]
-        )
+        try:
+            db.update_document(DATABASE_ID, COLLECTION_PROFILES, user_id, {'is_pro': True})
+            return "OK"
+        except: pass
+        
+        profiles = db.list_documents(DATABASE_ID, COLLECTION_PROFILES, queries=[Query.equal('user_id', user_id)])
         
         if profiles['total'] > 0:
             doc_id = profiles['documents'][0]['$id']
-            if not profiles['documents'][0].get('is_pro'):
-                db.update_document(DATABASE_ID, COLLECTION_PROFILES, doc_id, {'is_pro': True})
-                print(f"Пользователь {user_id} обновлен до PRO")
+            db.update_document(DATABASE_ID, COLLECTION_PROFILES, doc_id, {'is_pro': True})
         else:
-            db.create_document(DATABASE_ID, COLLECTION_PROFILES, 'unique()', 
-                {'user_id': user_id, 'is_pro': True, 'username': 'Неизвестный'})
-            print(f"Пользователь {user_id} создан и обновлен до PRO")
-                
+            username = "Subscriber"
+            try:
+                u = users.get(user_id)
+                username = u['name']
+            except: pass
+            
+            db.create_document(
+                DATABASE_ID, COLLECTION_PROFILES, ID.unique(), 
+                {
+                    'user_id': user_id, 
+                    'is_pro': True, 
+                    'username': username, 
+                    'email': 'recovered@sub.com'
+                },
+                permissions=[
+                    Permission.read(Role.user(user_id)),
+                    Permission.update(Role.user(user_id))
+                ]
+            )
         return "OK" 
-        
     except Exception as e:
-        print(f"Ошибка БД: {e}")
+        print(f"Ошибка вебхука: {e}")
         return "OK"
 
 if __name__ == "__main__":
